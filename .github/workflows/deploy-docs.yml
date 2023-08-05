@@ -1,47 +1,105 @@
+# 自动部署的名称
+name: GitHub pages deploy
 
-name: 部署文档
-
+# 自动部署的条件
 on:
   push:
     branches:
-      # 确保这是你正在使用的分支名称
-      - main
-
-permissions:
-  contents: write
+      - master
 
 jobs:
+  # 构建网站并部署到 GitHub Pages
   deploy-gh-pages:
+    # 运行环境
     runs-on: ubuntu-latest
+
+    # 步骤
     steps:
+      # 第一步: 下载源码
+      - name: Checkout
+        # action 配置详见 https://github.com/actions/checkout
+        uses: actions/checkout@v3
+        with:
+          # 如果本项目包含了子模块 (git submodules)，需要将此项设置为 true
+          # submodules: true
+
+          # 这是获取历史 commit 的深度，默认为 1，即只拉取最后一个 commit
+          # 这样可以加快拉取速度
+          #
+          # 如果项目使用 VuePress，为了正确通过 Git 历史提交记录生成页面的最后更新时间
+          # 需要设置为 0 以拉取完整的 git 历史提交
+          fetch-depth: 0
+
+          # 如果子模块包含私有仓库，需要设置 ssh key 或 token 以保证拥有拉取相应仓库的权限
+          # 您可以将 ssh-key 设置为 github 绑定公钥对应的私钥
+          # 也可以新建一个具有相关仓库访问权限的 github token
+          # token:
+
+      # 缓存 node_modules 以避免重复安装
+      - uses: actions/cache@v3
+        id: node-modules
+        with:
+          # 需要缓存的路径
+          path: node_modules/
+          # 缓存的 key
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('yarn.lock') }}
+          # 恢复 key
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      # 安装依赖
+      - name: Install Deps
+        # 只有没有命中缓存才会执行
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        # 严格按照 yarn.lock 安装依赖
+        run: yarn install --frozen-lockfile
+
+      # 构建项目
+      - name: Build
+        # 项目的构建命令
+        run: yarn run build
+
+      # 第四步，部署
+      - name: Deploy
+        # action 配置详见 https://github.com/JamesIves/github-pages-deploy-action
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          # 部署到的分支
+          branch: gh-pages
+          # 需要部署的文件夹
+          folder: dist
+
+  # 部署到服务器
+  deploy-server:
+    runs-on: ubuntu-latest
+    # 确保在部署到 GitHub Pages 之后执行
+    needs: deploy-gh-pages
+    steps:
+      # 检出网站代码
       - name: Checkout
         uses: actions/checkout@v3
         with:
+          # 检出 gh-pages 分支
+          ref: gh-pages
+          # 获取全部的历史提交
           fetch-depth: 0
-          # 如果你文档需要 Git 子模块，取消注释下一行
-          # submodules: true
 
+      # 配置环境
+      - name: Configuration environment
+        # 写入私钥、配置 Git 用户名，写入服务器地址
+        # 您需要自行将服务器的私钥写入 secrets 的 SSH_PRIVATE_KEY
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan machaojin1917939763 >> ~/.ssh/known_hosts
+          git config --global user.name 'machaojin'
+          git config --global user.email '1917939763@qq.com'
 
-
-      - name: 设置 Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-          cache: npm
-
-      - name: 安装依赖
-        run: npm ci
-
-      - name: 构建文档
-        env:
-          NODE_OPTIONS: --max_old_space_size=8192
-        run: |-
-          npm run docs:build
-          > src/.vuepress/dist/.nojekyll
-
-      - name: 部署文档
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          # 这是文档部署到的分支名称
-          branch: gh-pages
-          folder: src/.vuepress/dist
+      # 部署到服务器
+      - name: Deploy
+        # 使用 Git 将网站代码强制推送到远程的网站目录
+        # 并使用 SSH 连接服务器进入网站目录手动切换到最新提交
+        run: |
+          git push -f git@machaojin1917939763:<deploy dir> gh-pages
+          ssh git@machaojin1917939763 "cd <deploy dir> && git reset --hard HEAD"
